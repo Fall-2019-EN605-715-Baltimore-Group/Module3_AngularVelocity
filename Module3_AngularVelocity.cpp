@@ -21,71 +21,71 @@
 
 #define MOTOR_PIN   3   // Motor/fan is connected to digital pin 3
 #define IRDET_PIN   2   // IR detector output connected to digital pin 2
+#define IRLED_PIN   12
 
-#define DELAY_MS 1000 - 1
+#define MOTOR_VAL_Q 55
 
-volatile byte rpmcount;
+#define SAMPLE_MS   1000
 
-unsigned int rpm;
+#define MIN_TO_SEC  60
+#define SEC_TO_MSEC 1000
 
-unsigned long timeold;
+volatile unsigned intrCount = 0;
+
+bool fCountMutex = false;
+
+unsigned long prevSampleTime = 0;
+unsigned totalRotations = 0;
+
+char printTimeout = 10;
+
+float angularVelocity = 0.0f;
 
 /*
- * Interrupt function which is called when the fan blade interrupts the
- * link in between the IR emitter and detector
+ * Primary Interrupt Function
+ * Records number of times IR Emitter->Detector link is broken.
  */
-void isr0()
-{
-    //Each rotation, this interrupt function is run twice, so take that into consideration for
-    //calculating RPM
-    //Update count
-    rpmcount++;
-}
+void isr0() {  if (!fCountMutex) {(!digitalRead(IRDET_PIN))? ++intrCount : 0;} }
 
-/*
- * Setup the arduino
- */
 void setup()
 {
     // Configure Serial.
     Serial.begin(115200);
 
     // Configure Digital Pins.
-    pinMode(IRDET_PIN, INPUT_PULLUP);
+    pinMode(IRDET_PIN, INPUT);
     pinMode(MOTOR_PIN, OUTPUT);
+    pinMode(IRLED_PIN, OUTPUT);
 
-    //The IR detector is connected to a digital pin, convert to interrupt pin
+    digitalWrite(IRLED_PIN, HIGH);
+
+    //The IR detector is connected to a digital pin, convert to interrupt pin.
     //Triggers on FALLING (change from HIGH to LOW)
     attachInterrupt(digitalPinToInterrupt(IRDET_PIN), isr0, FALLING);
 
     //Turn the fan on
-    analogWrite(MOTOR_PIN, 70);
-
-    rpmcount = 0;
-    rpm = 0;
-    timeold = 0;
+    analogWrite(MOTOR_PIN, MOTOR_VAL_Q);
 }
 
-/*
- * Task loop
- */
 void loop()
 {
-    //Update RPM every second
-    delay(DELAY_MS);
-    //Don't process interrupts during calculations
-    detachInterrupt(0);
-    //Note that this would be 60*1000/(millis() - timeold)*rpmcount if the interrupt
-    //happened once per revolution instead of twice. Other multiples could be used
-    //for multi-bladed propellers or fans
-    rpm = 30*1000/(millis() - timeold)*rpmcount;
-    timeold = millis();
-    rpmcount = 0;
+    fCountMutex = true;      // Take the mutex
+
+    totalRotations = intrCount / 2;
+
+    intrCount = 0;
+
+    fCountMutex = false;    // Return the Mutex
+
+    prevSampleTime = millis();
+
+    angularVelocity = static_cast<float>(totalRotations)/*/(millis() - prevSampleTime)*/;
 
     //Write it out to serial port
-    Serial.println(rpm,DEC);
+    if (printTimeout++ % 2 == 0)
+    {
+        Serial.print(prevSampleTime); Serial.print(','); Serial.println(totalRotations);
+    }
 
-    //Restart the interrupt processing
-    attachInterrupt(0, isr0, FALLING);
-
+    delay(SAMPLE_MS);   // Wait for next sample
 }
